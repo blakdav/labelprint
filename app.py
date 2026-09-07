@@ -191,35 +191,49 @@ def zpl_body(text: str) -> str:
 
 def build_text_zpl(text, size, font, landscape=False):
     m = metrics(size, font, landscape)
-    body = zpl_body(text)
-    used = count_lines(text, m["chars_per_line"])
-    text_h = used * m["line_h"]
+    lines = wrap_lines(escape_zpl(text).strip(), m["chars_per_line"])
+    lines = lines[:m["lines"]]
 
-    if landscape:
-        # ^A0R rotates 90 degrees clockwise: the block runs down the
-        # label from the origin, and successive lines advance leftward.
-        # So the origin sits on the right and moves left to centre.
-        rot = "R"
-        origin_x = min(size["pw"] - size["margin_x"],
-                       (size["pw"] + text_h) // 2)
-        origin_y = size["margin_y"]
-    else:
-        rot = "N"
-        origin_x = size["margin_x"]
-        origin_y = max(size["margin_y"], (size["ll"] - text_h) // 2)
-
-    return (
+    head = (
         "^XA"
         "^CI28"
         f"^PW{size['pw']}"
         f"^LL{size['ll']}"
-        f"^FO{origin_x},{origin_y}"
-        f"^A0{rot},{font},{font}"
-        f"^FB{m['block']},{m['lines']},{LINE_GAP},C"
-        f"^FD{body}^FS"
-        "^PQ1"
-        "^XZ"
     )
+
+    if not landscape:
+        # ^FB handles wrapping and centring fine in the normal
+        # orientation, so let the printer do the work.
+        text_h = len(lines) * m["line_h"]
+        origin_y = max(size["margin_y"], (size["ll"] - text_h) // 2)
+        return (
+            head
+            + f"^FO{size['margin_x']},{origin_y}"
+            + f"^A0N,{font},{font}"
+            + f"^FB{m['block']},{m['lines']},{LINE_GAP},C"
+            + f"^FD{zpl_body(text)}^FS"
+            + "^PQ1^XZ"
+        )
+
+    # Rotated: ^FB positions unpredictably on this firmware, so place
+    # each line as its own field with explicit coordinates.
+    #
+    # Under ^A0R text reads top-to-bottom (along +y) and the glyph body
+    # extends along +x, so lines stack across the label's width and each
+    # line runs down its length.
+    text_block = len(lines) * m["line_h"]
+    start_x = max(size["margin_x"], (size["pw"] - text_block) // 2)
+
+    fields = []
+    for i, line in enumerate(lines):
+        body = escape_zpl(line)
+        # Centre each line along the axis it runs down.
+        line_w = len(line) * font * CHAR_WIDTH_RATIO
+        y = max(size["margin_y"], int((size["ll"] - line_w) / 2))
+        x = start_x + i * m["line_h"]
+        fields.append(f"^FO{x},{y}^A0R,{font},{font}^FD{body}^FS")
+
+    return head + "".join(fields) + "^PQ1^XZ"
 
 
 def clamp_font(raw, fallback):

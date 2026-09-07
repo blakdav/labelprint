@@ -63,15 +63,22 @@ stock in `state.json`.
 
 ## Orientation
 
-Portrait or landscape, per print, remembered per stock. Landscape emits
-`^A0R` (90 degrees clockwise) and swaps which label axis feeds the wrap
-box — on 4x6 that's 40 chars x 9 lines instead of 26 x 15 at font 70.
+Portrait or landscape, per print, remembered per stock. On 4x6 that's
+40 chars x 9 lines landscape versus 26 x 15 portrait at font 70.
 
-`^A0R` rotates around the field origin and advances successive lines
-*leftward*, so the origin sits on the right edge and moves left to
-centre. If landscape output lands off the label or upside down, the
-rotation letter in `build_text_zpl` is the knob: `R` is 90 clockwise,
-`B` is 270.
+The two orientations emit different ZPL:
+
+- **Portrait** uses `^FB`, letting the printer wrap and centre.
+- **Landscape** does *not*. This firmware positions `^FB` unpredictably
+  when combined with a rotated font (`^A0R`), so each wrapped line is
+  emitted as its own `^FO`/`^FD` field at explicit coordinates. Wrapping
+  is done in Python — the same `wrap_lines` the preview and capacity
+  check already use.
+
+Landscape assumes `^A0R` text reads top-to-bottom along +y with the
+glyph body extending along +x, so lines stack across the label width and
+each line runs down its length. If output is mirrored or offset, those
+two assumptions in `build_text_zpl` are the knobs.
 
 ## Preview
 
