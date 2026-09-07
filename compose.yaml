@@ -1,0 +1,12 @@
+services:
+  labelprint:
+    image: ghcr.io/blakdav/labelprint:latest
+    container_name: labelprint
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PRINTER_HOST: 172.23.24.79
+      PRINTER_PORT: 9100
+    volumes:
+      - ./data:/data
