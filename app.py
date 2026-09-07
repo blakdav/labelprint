@@ -18,10 +18,11 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
 STATE_FILE = DATA_DIR / "state.json"
 SIZES_FILE = DATA_DIR / "sizes.json"
 
-# ZPL font 0 is proportional. Average glyph advance lands near 0.55x the
-# font height for mixed-case text; the preview uses the same ratio so the
-# two agree. Slightly generous, so borderline text shows as overflowing.
-CHAR_WIDTH_RATIO = 0.55
+# ZPL font 0 is proportional. Measured against real 203 dpi output: a
+# 732-dot block at font 70 fits ~27 mixed-case characters, so the average
+# glyph advance is ~0.39x the font height. Tunable without a rebuild if a
+# different font or character mix shifts it.
+CHAR_WIDTH_RATIO = float(os.environ.get("CHAR_WIDTH_RATIO", "0.39"))
 LINE_GAP = 4  # dots of extra leading between wrapped lines
 
 # All dimensions in dots. inches * 203 = dots.
@@ -107,11 +108,19 @@ def metrics(size, font):
 
 
 def wrap_lines(text, chars_per_line):
-    """Greedy word wrap matching ^FB behaviour closely enough for capacity."""
+    """Greedy word wrap matching ^FB behaviour closely enough for capacity.
+
+    Explicit newlines are hard breaks — ^FB treats each \\& the same way,
+    so a blank line costs a line of the budget just like it does here.
+    """
     out = []
-    for para in (text.splitlines() or [""]):
+    for para in text.split("\n"):
+        words = para.split()
+        if not words:
+            out.append("")
+            continue
         line = ""
-        for word in para.split():
+        for word in words:
             candidate = f"{line} {word}".strip()
             if len(candidate) <= chars_per_line:
                 line = candidate
@@ -125,6 +134,10 @@ def wrap_lines(text, chars_per_line):
                 line = word
         out.append(line)
     return out
+
+
+def count_lines(text, chars_per_line):
+    return len(wrap_lines(escape_zpl(text).strip(), chars_per_line))
 
 
 # --- printer ---------------------------------------------------------------
@@ -143,14 +156,28 @@ def send_raw(payload: str):
 
 
 def escape_zpl(text: str) -> str:
-    """Strip ZPL control characters so input can't break the format."""
+    """Strip ZPL control characters so input can't break the format.
+
+    Backslash goes too, which means it must be stripped *before* the
+    \\& line-break sequences are inserted (see zpl_body).
+    """
     return text.replace("^", "").replace("~", "").replace("\\", "")
+
+
+def zpl_body(text: str) -> str:
+    """Escaped text with newlines turned into ^FB's line-break sequence.
+
+    ^FD ignores a raw newline entirely — without this, paragraphs run
+    together into one blob.
+    """
+    lines = [ln.strip() for ln in escape_zpl(text).strip().splitlines()]
+    return "\\&".join(lines)
 
 
 def build_text_zpl(text, size, font):
     m = metrics(size, font)
-    body = escape_zpl(text).strip()
-    used = len(wrap_lines(body, m["chars_per_line"]))
+    body = zpl_body(text)
+    used = count_lines(text, m["chars_per_line"])
 
     # Centre the text block vertically rather than pinning it to the top.
     text_h = used * m["line_h"]
@@ -211,7 +238,7 @@ def do_print():
     font = clamp_font(request.form.get("font"), font_for(state, sizes, stock))
 
     m = metrics(size, font)
-    used = len(wrap_lines(escape_zpl(text).strip(), m["chars_per_line"]))
+    used = count_lines(text, m["chars_per_line"])
     if used > m["lines"]:
         return jsonify(
             ok=False,

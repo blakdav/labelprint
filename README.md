@@ -79,6 +79,14 @@ anyway, since `^FB` drops extra lines silently.
   `^GF`) reliably; it's the configuration and control commands that are
   unsafe. Test any new `~` command before wiring it to a button.
 - `^`, `~`, `\` are stripped from input — they're ZPL control chars.
+  Stripping happens *before* newlines become `\&`, so typing `\&`
+  yourself can't inject a line break.
+- `^FD` ignores raw newlines. Blank lines and paragraph breaks are
+  converted to `\&`, which `^FB` treats as a hard break.
+- `CHAR_WIDTH_RATIO` (default 0.39) is measured from real output: a
+  732-dot block at font 70 fits ~27 characters. Override it with the
+  env var if your text runs consistently wider or narrower than the
+  preview predicts.
 - `^FB` drops overflow lines silently, so the server rejects text that
   needs more lines than fit rather than printing a truncated label.
 

@@ -193,9 +193,12 @@ function metrics(size, font) {
 
 function wrap(text, cpl) {
   const out = [];
-  for (const para of (text.split("\n").length ? text.split("\n") : [""])) {
+  // Explicit newlines are hard breaks, same as ^FB's \& sequence.
+  for (const para of text.split("\n")) {
+    const words = para.split(/\s+/).filter(Boolean);
+    if (!words.length) { out.push(""); continue; }
     let line = "";
-    for (let word of para.split(/\s+/).filter(Boolean)) {
+    for (let word of words) {
       const cand = (line ? line + " " : "") + word;
       if (cand.length <= cpl) { line = cand; }
       else {
@@ -247,17 +250,28 @@ function draw() {
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
   ctx.font = `${font}px "Helvetica Neue", Arial, sans-serif`;
+  const fit = (line, y) => {
+    // Squeeze to the wrap box if the browser font runs wider than ZPL's.
+    const w = ctx.measureText(line).width;
+    if (w > m.block && w > 0) {
+      ctx.save();
+      ctx.translate(size.margin_x + m.block / 2, y);
+      ctx.scale(m.block / w, 1);
+      ctx.fillText(line, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.fillText(line, size.margin_x + m.block / 2, y);
+    }
+  };
   shown.forEach((line, i) => {
-    ctx.fillText(line, size.margin_x + m.block / 2,
-                 originY + i * m.lineH + font * 0.82);
+    fit(line, originY + i * m.lineH + font * 0.82);
   });
 
   // Dropped lines, ghosted below the box.
   if (over) {
     ctx.fillStyle = "rgba(217,100,91,.45)";
     lines.slice(m.lines).forEach((line, i) => {
-      ctx.fillText(line, size.margin_x + m.block / 2,
-                   originY + (m.lines + i) * m.lineH + font * 0.82);
+      fit(line, originY + (m.lines + i) * m.lineH + font * 0.82);
     });
   }
 
