@@ -229,6 +229,12 @@ def do_print():
 
 @app.post("/stock")
 def set_stock():
+    """Store the loaded stock. Deliberately does NOT send ~JC.
+
+    On this printer's firmware, ~JC over TCP takes the network stack down
+    and it does not come back without a power cycle. Media calibration has
+    to be done with the feed button on the printer itself.
+    """
     sizes = load_sizes()
     stock = request.form.get("stock")
     if stock not in sizes:
@@ -238,23 +244,12 @@ def set_stock():
     state["stock"] = stock
     save_state(state)
 
-    ok, message = send_raw("~JC")
-    if ok:
-        message = (f"Stock set to {sizes[stock]['label']}. "
-                   "Calibrating — expect a few blanks.")
     return jsonify(
-        ok=ok, message=message,
+        ok=True,
+        message=f"Stock set to {sizes[stock]['label']}.",
         label=sizes[stock]["label"],
         font=font_for(state, sizes, stock),
-    ), (200 if ok else 502)
-
-
-@app.post("/calibrate")
-def calibrate():
-    ok, message = send_raw("~JC")
-    if ok:
-        message = "Calibrating — expect a few blank labels."
-    return jsonify(ok=ok, message=message), (200 if ok else 502)
+    )
 
 
 if __name__ == "__main__":

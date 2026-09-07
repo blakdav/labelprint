@@ -71,11 +71,16 @@ anyway, since `^FB` drops extra lines silently.
 
 ## Notes
 
-- "Set & calibrate" stores the new stock **and** sends `~JC`. Run it
-  whenever you swap rolls — the gap sensor is tuned per media.
-- If `~JC` does nothing, the firmware may not implement it; use the
-  feed-button sequence in the printer manual instead.
+- **Calibration must be done at the printer.** Sending `~JC` over TCP
+  takes this printer's network stack down and it does not recover
+  without a power cycle — reproducible, so the app never sends it. After
+  swapping rolls, use the feed-button sequence in the printer manual.
+- The firmware handles ZPL *drawing* commands (`^FO`, `^FB`, `^A0`,
+  `^GF`) reliably; it's the configuration and control commands that are
+  unsafe. Test any new `~` command before wiring it to a button.
 - `^`, `~`, `\` are stripped from input — they're ZPL control chars.
+- `^FB` drops overflow lines silently, so the server rejects text that
+  needs more lines than fit rather than printing a truncated label.
 
 ## TODO
 

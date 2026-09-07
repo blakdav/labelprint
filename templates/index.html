@@ -90,6 +90,12 @@
   #msg.ok { color: var(--ok); }
   #msg.err { color: var(--err); }
   footer { color: var(--muted); font-size: .74rem; text-align: center; margin-top: 1.4rem; }
+  .note {
+    color: var(--muted); font-size: .78rem; line-height: 1.45;
+    margin: .8rem 0 0; padding-left: .7rem;
+    border-left: 2px solid var(--line);
+  }
+  .note b { color: var(--fg); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -139,11 +145,13 @@
         </option>
         {% endfor %}
       </select>
-      <button id="setstock">Set &amp; calibrate</button>
+      <button id="setstock">Set stock</button>
     </div>
-    <div class="actions">
-      <button id="calibrate" class="ghost">Calibrate only</button>
-    </div>
+    <p class="note">
+      After swapping rolls, calibrate with the <b>feed button on the
+      printer</b>. Sending calibration over the network takes this
+      printer's NIC down until it's power-cycled.
+    </p>
   </div>
 
   <footer>Ctrl/⌘ + Enter to print</footer>
@@ -311,7 +319,6 @@ $("setstock").onclick = async () => {
   }
 };
 
-$("calibrate").onclick = () => post("/calibrate", {});
 $("fit").onclick = fitFont;
 
 document.querySelectorAll(".chip[data-scale]").forEach(b => {
