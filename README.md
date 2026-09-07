@@ -61,6 +61,18 @@ stock default), a free number input, or **Fit**, which finds the largest
 size at which the text still fits. The chosen font is remembered per
 stock in `state.json`.
 
+## Orientation
+
+Portrait or landscape, per print, remembered per stock. Landscape emits
+`^A0R` (90 degrees clockwise) and swaps which label axis feeds the wrap
+box — on 4x6 that's 40 chars x 9 lines instead of 26 x 15 at font 70.
+
+`^A0R` rotates around the field origin and advances successive lines
+*leftward*, so the origin sits on the right edge and moves left to
+centre. If landscape output lands off the label or upside down, the
+rotation letter in `build_text_zpl` is the knob: `R` is 90 clockwise,
+`B` is 270.
+
 ## Preview
 
 The canvas preview renders locally — no external service. It mirrors the
@@ -68,6 +80,21 @@ server's wrap logic and shows the wrap box, so overflow is visible before
 printing. Character widths are estimated (`CHAR_WIDTH_RATIO`), so it's a
 fit check rather than a proof; the server rejects genuine overflow
 anyway, since `^FB` drops extra lines silently.
+
+## Printer help
+
+A collapsed "Printer help" section in the UI covers the manual
+recalibration sequence (power off 3s → hold feed → power on → release on
+beep/blink), the feed-button LED codes, and a link to the printer's own
+config page at `http://$PRINTER_HOST`.
+
+That link is derived from `PRINTER_HOST`, so pointing the app at a
+different address updates it too — there's one place to change. The app
+can't discover the printer on its own; set a DHCP reservation so the
+address doesn't move.
+
+A dot next to the address in the header polls `/status` every 30s and
+turns green or red depending on whether port 9100 accepts a connection.
 
 ## Notes
 

@@ -67,7 +67,7 @@ def load_sizes():
 
 def load_state():
     sizes = load_sizes()
-    state = {"stock": next(iter(sizes)), "fonts": {}}
+    state = {"stock": next(iter(sizes)), "fonts": {}, "landscape": {}}
     if STATE_FILE.exists():
         try:
             saved = json.loads(STATE_FILE.read_text())
@@ -75,6 +75,8 @@ def load_state():
                 state["stock"] = saved["stock"]
             if isinstance(saved.get("fonts"), dict):
                 state["fonts"] = saved["fonts"]
+            if isinstance(saved.get("landscape"), dict):
+                state["landscape"] = saved["landscape"]
         except (json.JSONDecodeError, OSError):
             pass
     return state
@@ -89,12 +91,25 @@ def font_for(state, sizes, stock):
     return int(state["fonts"].get(stock, sizes[stock]["default_font"]))
 
 
+def landscape_for(state, stock):
+    return bool(state["landscape"].get(stock, False))
+
+
 # --- geometry --------------------------------------------------------------
 
-def metrics(size, font):
-    """Derive the wrap box and capacity for a given stock and font size."""
-    block = size["pw"] - 2 * size["margin_x"]
-    usable_h = size["ll"] - 2 * size["margin_y"]
+def metrics(size, font, landscape=False):
+    """Derive the wrap box and capacity for a stock, font and orientation.
+
+    In landscape the text is rotated 90 degrees, so the wrap box runs
+    along the label's long axis: block width comes from the label length
+    and the line budget from the print width.
+    """
+    if landscape:
+        block = size["ll"] - 2 * size["margin_y"]
+        usable_h = size["pw"] - 2 * size["margin_x"]
+    else:
+        block = size["pw"] - 2 * size["margin_x"]
+        usable_h = size["ll"] - 2 * size["margin_y"]
     line_h = font + LINE_GAP
     lines = max(1, usable_h // line_h)
     chars_per_line = max(1, int(block / (font * CHAR_WIDTH_RATIO)))
@@ -174,22 +189,32 @@ def zpl_body(text: str) -> str:
     return "\\&".join(lines)
 
 
-def build_text_zpl(text, size, font):
-    m = metrics(size, font)
+def build_text_zpl(text, size, font, landscape=False):
+    m = metrics(size, font, landscape)
     body = zpl_body(text)
     used = count_lines(text, m["chars_per_line"])
-
-    # Centre the text block vertically rather than pinning it to the top.
     text_h = used * m["line_h"]
-    origin_y = max(size["margin_y"], (size["ll"] - text_h) // 2)
+
+    if landscape:
+        # ^A0R rotates 90 degrees clockwise: the block runs down the
+        # label from the origin, and successive lines advance leftward.
+        # So the origin sits on the right and moves left to centre.
+        rot = "R"
+        origin_x = min(size["pw"] - size["margin_x"],
+                       (size["pw"] + text_h) // 2)
+        origin_y = size["margin_y"]
+    else:
+        rot = "N"
+        origin_x = size["margin_x"]
+        origin_y = max(size["margin_y"], (size["ll"] - text_h) // 2)
 
     return (
         "^XA"
         "^CI28"
         f"^PW{size['pw']}"
         f"^LL{size['ll']}"
-        f"^FO{size['margin_x']},{origin_y}"
-        f"^A0N,{font},{font}"
+        f"^FO{origin_x},{origin_y}"
+        f"^A0{rot},{font},{font}"
         f"^FB{m['block']},{m['lines']},{LINE_GAP},C"
         f"^FD{body}^FS"
         "^PQ1"
@@ -217,11 +242,15 @@ def index():
         current=stock,
         font=font_for(state, sizes, stock),
         fonts=state["fonts"],
+        landscape=landscape_for(state, stock),
+        landscapes=state["landscape"],
         font_min=FONT_MIN,
         font_max=FONT_MAX,
         char_ratio=CHAR_WIDTH_RATIO,
         line_gap=LINE_GAP,
         printer=f"{PRINTER_HOST}:{PRINTER_PORT}",
+        printer_host=PRINTER_HOST,
+        config_url=f"http://{PRINTER_HOST}",
     )
 
 
@@ -236,21 +265,23 @@ def do_print():
     stock = state["stock"]
     size = sizes[stock]
     font = clamp_font(request.form.get("font"), font_for(state, sizes, stock))
+    landscape = request.form.get("landscape") in ("1", "true", "on")
 
-    m = metrics(size, font)
+    m = metrics(size, font, landscape)
     used = count_lines(text, m["chars_per_line"])
     if used > m["lines"]:
         return jsonify(
             ok=False,
             message=f"Needs {used} lines, only {m['lines']} fit at {font} dots. "
-                    "Shrink the font or shorten the text.",
+                    "Shrink the font, shorten the text, or rotate.",
         ), 400
 
-    # Remember the font per stock so it survives a reload.
+    # Remember font and orientation per stock so they survive a reload.
     state["fonts"][stock] = font
+    state["landscape"][stock] = landscape
     save_state(state)
 
-    ok, message = send_raw(build_text_zpl(text, size, font))
+    ok, message = send_raw(build_text_zpl(text, size, font, landscape))
     return jsonify(ok=ok, message=message), (200 if ok else 502)
 
 
@@ -276,7 +307,18 @@ def set_stock():
         message=f"Stock set to {sizes[stock]['label']}.",
         label=sizes[stock]["label"],
         font=font_for(state, sizes, stock),
+        landscape=landscape_for(state, stock),
     )
+
+
+@app.get("/status")
+def status():
+    """Cheap reachability check for the status dot in the header."""
+    try:
+        with socket.create_connection((PRINTER_HOST, PRINTER_PORT), timeout=2):
+            return jsonify(ok=True, host=PRINTER_HOST)
+    except OSError as exc:
+        return jsonify(ok=False, host=PRINTER_HOST, message=str(exc))
 
 
 if __name__ == "__main__":

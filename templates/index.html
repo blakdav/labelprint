@@ -67,6 +67,7 @@
     margin-top: .8rem; flex-wrap: wrap;
   }
   .fontrow input[type=number] { width: 5rem; }
+  .fontrow .spacer { flex-basis: 100%; height: 0; }
   .fontrow label { color: var(--muted); font-size: .8rem; }
 
   /* Preview */
@@ -96,12 +97,52 @@
     border-left: 2px solid var(--line);
   }
   .note b { color: var(--fg); font-weight: 600; }
+
+  details.help { border: 1px solid var(--line); border-radius: 10px;
+    background: var(--panel); padding: 0; margin-bottom: 1rem; }
+  details.help > summary {
+    cursor: pointer; list-style: none; padding: .85rem 1.1rem;
+    font-size: .72rem; text-transform: uppercase; letter-spacing: .09em;
+    color: var(--muted); font-weight: 600; user-select: none;
+  }
+  details.help > summary::-webkit-details-marker { display: none; }
+  details.help > summary::after { content: " ▸"; }
+  details.help[open] > summary::after { content: " ▾"; }
+  details.help > summary:hover { color: var(--fg); }
+  .help-body { padding: 0 1.1rem 1.1rem; font-size: .85rem; }
+  .help-body h3 {
+    font-size: .8rem; margin: 1rem 0 .4rem; color: var(--fg); font-weight: 600;
+  }
+  .help-body h3:first-child { margin-top: 0; }
+  .help-body ol { margin: .3rem 0; padding-left: 1.2rem; }
+  .help-body li { margin: .3rem 0; }
+  .help-body p { margin: .4rem 0; color: var(--muted); }
+  .help-body a { color: var(--accent); }
+  .leds { list-style: none; padding: 0; margin: .4rem 0; }
+  .leds li { display: flex; gap: .55rem; align-items: baseline; margin: .3rem 0; }
+  .dot {
+    width: .62rem; height: .62rem; border-radius: 50%;
+    flex: none; border: 2px solid currentColor; translate: 0 .1rem;
+  }
+  .dot.blue { color: #4a8fe0; } .dot.purple { color: #a06fd4; }
+  .dot.red { color: #d9645b; } .dot.redblink { color: #d9645b; opacity: .55; }
+
+  .status { display: inline-flex; align-items: center; gap: .4rem; }
+  .status .led {
+    width: .5rem; height: .5rem; border-radius: 50%;
+    background: var(--muted);
+  }
+  .status.up .led { background: var(--ok); }
+  .status.down .led { background: var(--err); }
 </style>
 </head>
 <body>
 <main>
   <h1>labelprint</h1>
-  <div class="sub">{{ printer }}</div>
+  <div class="sub status" id="status">
+    <span class="led"></span>
+    <span id="status-text">{{ printer }}</span>
+  </div>
 
   <div class="panel">
     <h2>Preview</h2>
@@ -126,6 +167,10 @@
       <input type="number" id="font" value="{{ font }}"
              min="{{ font_min }}" max="{{ font_max }}">
       <button class="chip" id="fit">Fit</button>
+      <span class="spacer"></span>
+      <label>Orientation</label>
+      <button class="chip orient" data-land="0">Portrait</button>
+      <button class="chip orient" data-land="1">Landscape</button>
     </div>
 
     <div class="actions">
@@ -134,6 +179,40 @@
     </div>
     <div id="msg"></div>
   </div>
+
+  <details class="help">
+    <summary>Printer help</summary>
+    <div class="help-body">
+      <h3>Recalibrate after changing label size</h3>
+      <p>Do this at the printer itself.</p>
+      <ol>
+        <li>Load the new labels and close the cover.</li>
+        <li>Switch the printer <b>off</b> for 3 seconds.</li>
+        <li>Hold the <b>feed button</b> on top and switch it back
+            <b>on</b>, keeping the button held.</li>
+        <li>Release when the printer beeps or the feed light blinks.
+            It will then calibrate against the new stock.</li>
+      </ol>
+
+      <h3>Feed button light</h3>
+      <ul class="leds">
+        <li><span class="dot blue"></span><span><b>Solid blue</b> —
+            ready. Press to feed a label.</span></li>
+        <li><span class="dot purple"></span><span><b>Solid purple</b> —
+            calibrating.</span></li>
+        <li><span class="dot red"></span><span><b>Solid red</b> —
+            press the cover down to close it.</span></li>
+        <li><span class="dot redblink"></span><span><b>Blinking red</b> —
+            restart the printer, then recalibrate.</span></li>
+      </ul>
+
+      <h3>Printer config page</h3>
+      <p><a href="{{ config_url }}" target="_blank"
+            rel="noopener" id="cfg">{{ config_url }}</a> — network
+         settings and printer status. Follows <code>PRINTER_HOST</code>,
+         so it updates if you point the app at a different address.</p>
+    </div>
+  </details>
 
   <div class="panel">
     <h2>Change stock</h2>
@@ -148,9 +227,8 @@
       <button id="setstock">Set stock</button>
     </div>
     <p class="note">
-      After swapping rolls, calibrate with the <b>feed button on the
-      printer</b>. Sending calibration over the network takes this
-      printer's NIC down until it's power-cycled.
+      After swapping rolls, recalibrate at the printer — see
+      <b>Printer help</b> below.
     </p>
   </div>
 
@@ -164,7 +242,9 @@ const LINE_GAP = {{ line_gap }};
 const FONT_MIN = {{ font_min }}, FONT_MAX = {{ font_max }};
 
 let stock = {{ current | tojson }};
+let landscape = {{ landscape | tojson }};
 const savedFonts = {{ fonts | tojson }};
+const savedLand = {{ landscapes | tojson }};
 
 const $ = id => document.getElementById(id);
 const canvas = $("paper"), ctx = canvas.getContext("2d");
@@ -181,8 +261,12 @@ function fontValue() {
 
 // Mirrors metrics() and wrap_lines() in app.py.
 function metrics(size, font) {
-  const block = size.pw - 2 * size.margin_x;
-  const usableH = size.ll - 2 * size.margin_y;
+  // Landscape rotates the text 90 degrees, so the wrap box runs along
+  // the long axis: block from the label length, lines from the width.
+  const block = landscape ? size.ll - 2 * size.margin_y
+                          : size.pw - 2 * size.margin_x;
+  const usableH = landscape ? size.pw - 2 * size.margin_x
+                            : size.ll - 2 * size.margin_y;
   const lineH = font + LINE_GAP;
   return {
     block, lineH,
@@ -233,34 +317,49 @@ function draw() {
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, size.pw, size.ll);
 
+  const shown = lines.slice(0, over ? m.lines : lines.length);
+  const textH = shown.length * m.lineH;
+
+  // Draw in the text's own frame: for landscape, rotate the canvas so
+  // the same layout code lays out along the label's long axis.
+  ctx.save();
+  let boxX, boxY;
+  if (landscape) {
+    ctx.translate(size.pw, 0);
+    ctx.rotate(Math.PI / 2);
+    boxX = size.margin_y;
+    boxY = size.margin_x;
+  } else {
+    boxX = size.margin_x;
+    boxY = size.margin_y;
+  }
+  const axisLen = landscape ? size.pw : size.ll;
+  const originY = Math.max(landscape ? size.margin_x : size.margin_y,
+                           Math.floor((axisLen - textH) / 2));
+
   // Wrap-box guide.
   ctx.strokeStyle = over ? "rgba(217,100,91,.55)" : "rgba(0,0,0,.13)";
   ctx.lineWidth = 1 / scale;
   ctx.setLineDash([6 / scale, 5 / scale]);
-  ctx.strokeRect(size.margin_x, size.margin_y,
-                 m.block, m.lines * m.lineH);
+  ctx.strokeRect(boxX, boxY, m.block, m.lines * m.lineH);
   ctx.setLineDash([]);
-
-  // Text, vertically centred like build_text_zpl().
-  const shown = lines.slice(0, over ? m.lines : lines.length);
-  const textH = shown.length * m.lineH;
-  const originY = Math.max(size.margin_y, Math.floor((size.ll - textH) / 2));
 
   ctx.fillStyle = "#000";
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
   ctx.font = `${font}px "Helvetica Neue", Arial, sans-serif`;
+  const cx = boxX + m.block / 2;
   const fit = (line, y) => {
     // Squeeze to the wrap box if the browser font runs wider than ZPL's.
     const w = ctx.measureText(line).width;
     if (w > m.block && w > 0) {
       ctx.save();
-      ctx.translate(size.margin_x + m.block / 2, y);
+      ctx.translate(cx, y);
       ctx.scale(m.block / w, 1);
       ctx.fillText(line, 0, 0);
       ctx.restore();
     } else {
-      ctx.fillText(line, size.margin_x + m.block / 2, y);
+      ctx.fillText(line, cx, y);
     }
   };
   shown.forEach((line, i) => {
@@ -274,8 +373,10 @@ function draw() {
       fit(line, originY + (m.lines + i) * m.lineH + font * 0.82);
     });
   }
+  ctx.restore();
 
-  $("m-stock").textContent = size.label;
+  $("m-stock").textContent = size.label +
+    (landscape ? " landscape" : " portrait");
   $("m-font").textContent = font;
   $("m-lines").textContent = `${lines.length}/${m.lines}`;
   $("m-warn").innerHTML = over
@@ -285,6 +386,9 @@ function draw() {
   document.querySelectorAll(".chip[data-scale]").forEach(b => {
     const target = Math.round(size.default_font * parseFloat(b.dataset.scale));
     b.classList.toggle("on", target === font);
+  });
+  document.querySelectorAll(".chip.orient").forEach(b => {
+    b.classList.toggle("on", (b.dataset.land === "1") === landscape);
   });
 }
 
@@ -319,7 +423,7 @@ async function post(url, data) {
 $("print").onclick = () => {
   const text = $("text").value;
   if (!text.trim()) return say("Nothing to print.", "err");
-  post("/print", { text, font: fontValue() });
+  post("/print", { text, font: fontValue(), landscape: landscape ? 1 : 0 });
 };
 
 $("setstock").onclick = async () => {
@@ -329,11 +433,16 @@ $("setstock").onclick = async () => {
     stock = next;
     $("loaded").textContent = res.label;
     $("font").value = res.font ?? SIZES[stock].default_font;
+    landscape = !!res.landscape;
     draw();
   }
 };
 
 $("fit").onclick = fitFont;
+
+document.querySelectorAll(".chip.orient").forEach(b => {
+  b.onclick = () => { landscape = b.dataset.land === "1"; draw(); };
+});
 
 document.querySelectorAll(".chip[data-scale]").forEach(b => {
   b.onclick = () => {
@@ -348,6 +457,21 @@ $("text").addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") $("print").click();
 });
 window.addEventListener("resize", draw);
+
+async function checkStatus() {
+  const el = $("status"), txt = $("status-text");
+  try {
+    const r = await (await fetch("/status")).json();
+    el.className = "sub status " + (r.ok ? "up" : "down");
+    txt.textContent = r.ok ? {{ printer | tojson }}
+                           : {{ printer | tojson }} + " — unreachable";
+  } catch {
+    el.className = "sub status down";
+    txt.textContent = {{ printer | tojson }} + " — unreachable";
+  }
+}
+checkStatus();
+setInterval(checkStatus, 30000);
 
 draw();
 </script>
