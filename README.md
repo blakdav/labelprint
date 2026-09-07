@@ -36,27 +36,38 @@ Pull a specific build with the short-SHA or `vX.Y.Z` tag instead of
 ## Label stocks
 
 Sizes live in `DEFAULT_SIZES` in `app.py`, overridable by dropping a
-`sizes.json` in `DATA_DIR`. All units are **dots**: inches × 203 (the
-printer is 203 dpi).
+`sizes.json` in `DATA_DIR`. All dimensions are **dots**: inches × 203.
 
-```json
-{
-  "4x6": {
-    "label": "4\" x 6\" shipping",
-    "pw": 812, "ll": 1218,
-    "origin_x": 40, "origin_y": 60,
-    "font": 70, "block": 730, "lines": 6
-  }
-}
-```
+| Key | Label | Dots |
+| --- | --- | --- |
+| `4x6` | 4" × 6" | 812 × 1218 |
+| `4x2` | 4" × 2" | 812 × 406 |
+| `2x1` | 2" × 1" | 406 × 203 |
+| `1.57x0.78` | 1.57" × 0.78" | 319 × 158 |
+
+Each entry stores `pw`, `ll`, `margin_x`, `margin_y` and `default_font`.
+Line count and characters-per-line are **derived** from the font size at
+print time, not stored — so a smaller font yields more lines
+automatically.
 
 - `pw` — print width. Larger than the physical label **clips silently**.
-- `ll` — label length.
-- `block`/`lines` — `^FB` wrap box. Overflow is silently dropped, so the
-  app length-checks before sending.
+- `margin_*` — whitespace on each edge; the wrap box is what's left.
+- `default_font` — starting font height in dots for that stock.
 
-The currently loaded stock is remembered in `state.json` so you don't
-pick a size on every print.
+## Font
+
+Font height is picked per print: S/M/L presets (0.6× / 1× / 1.5× the
+stock default), a free number input, or **Fit**, which finds the largest
+size at which the text still fits. The chosen font is remembered per
+stock in `state.json`.
+
+## Preview
+
+The canvas preview renders locally — no external service. It mirrors the
+server's wrap logic and shows the wrap box, so overflow is visible before
+printing. Character widths are estimated (`CHAR_WIDTH_RATIO`), so it's a
+fit check rather than a proof; the server rejects genuine overflow
+anyway, since `^FB` drops extra lines silently.
 
 ## Notes
 

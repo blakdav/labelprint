@@ -23,10 +23,7 @@
     display: flex; justify-content: center;
   }
   main { width: 100%; max-width: 34rem; }
-  h1 {
-    font-size: 1.1rem; font-weight: 600; letter-spacing: .02em;
-    margin: 0 0 .25rem;
-  }
+  h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 .25rem; }
   .sub { color: var(--muted); font-size: .82rem; margin-bottom: 1.5rem; }
   .panel {
     background: var(--panel); border: 1px solid var(--line);
@@ -36,13 +33,15 @@
     font-size: .72rem; text-transform: uppercase; letter-spacing: .09em;
     color: var(--muted); margin: 0 0 .8rem; font-weight: 600;
   }
-  textarea, select {
+  textarea, select, input[type=number] {
     width: 100%; background: #0f1115; color: var(--fg);
     border: 1px solid var(--line); border-radius: 7px;
-    padding: .65rem .75rem; font: inherit; resize: vertical;
+    padding: .6rem .7rem; font: inherit;
   }
-  textarea { min-height: 6.5rem; }
-  textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+  textarea { min-height: 5rem; resize: vertical; }
+  textarea:focus, select:focus, input:focus {
+    outline: none; border-color: var(--accent);
+  }
   .row { display: flex; gap: .6rem; align-items: center; }
   .row > select { flex: 1; }
   button {
@@ -57,24 +56,40 @@
     border: 1px solid var(--line);
   }
   button.ghost:hover { color: var(--fg); border-color: var(--muted); }
-  .actions {
-    display: flex; gap: .6rem; align-items: center;
-    margin-top: .8rem;
+  button.chip {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--line); padding: .4rem .7rem; font-size: .8rem;
   }
-  .loaded {
-    color: var(--muted); font-size: .82rem; margin-left: auto;
+  button.chip.on { background: var(--accent); color: #0f1115; border-color: var(--accent); }
+
+  .fontrow {
+    display: flex; gap: .4rem; align-items: center;
+    margin-top: .8rem; flex-wrap: wrap;
   }
+  .fontrow input[type=number] { width: 5rem; }
+  .fontrow label { color: var(--muted); font-size: .8rem; }
+
+  /* Preview */
+  #stage {
+    display: flex; justify-content: center;
+    padding: 1rem; background: #0f1115;
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  #paper { background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.4); }
+  .meta {
+    display: flex; gap: 1rem; flex-wrap: wrap;
+    color: var(--muted); font-size: .78rem; margin-top: .7rem;
+  }
+  .meta b { color: var(--fg); font-weight: 600; }
+  .meta .over { color: var(--err); }
+
+  .actions { display: flex; gap: .6rem; align-items: center; margin-top: .9rem; }
+  .loaded { color: var(--muted); font-size: .82rem; margin-left: auto; }
   .loaded b { color: var(--fg); font-weight: 600; }
-  #msg {
-    min-height: 1.3rem; font-size: .85rem; margin-top: .9rem;
-    color: var(--muted);
-  }
+  #msg { min-height: 1.3rem; font-size: .85rem; margin-top: .9rem; color: var(--muted); }
   #msg.ok { color: var(--ok); }
   #msg.err { color: var(--err); }
-  footer {
-    color: var(--muted); font-size: .74rem;
-    text-align: center; margin-top: 1.4rem;
-  }
+  footer { color: var(--muted); font-size: .74rem; text-align: center; margin-top: 1.4rem; }
 </style>
 </head>
 <body>
@@ -83,11 +98,33 @@
   <div class="sub">{{ printer }}</div>
 
   <div class="panel">
+    <h2>Preview</h2>
+    <div id="stage"><canvas id="paper"></canvas></div>
+    <div class="meta">
+      <span>Stock <b id="m-stock">{{ sizes[current].label }}</b></span>
+      <span>Font <b id="m-font">{{ font }}</b> dots</span>
+      <span>Lines <b id="m-lines">0/0</b></span>
+      <span id="m-warn"></span>
+    </div>
+  </div>
+
+  <div class="panel">
     <h2>Print</h2>
     <textarea id="text" placeholder="Type label text…" autofocus></textarea>
+
+    <div class="fontrow">
+      <label>Font</label>
+      <button class="chip" data-scale="0.6">S</button>
+      <button class="chip" data-scale="1.0">M</button>
+      <button class="chip" data-scale="1.5">L</button>
+      <input type="number" id="font" value="{{ font }}"
+             min="{{ font_min }}" max="{{ font_max }}">
+      <button class="chip" id="fit">Fit</button>
+    </div>
+
     <div class="actions">
       <button id="print">Print</button>
-      <span class="loaded">Loaded: <b id="loaded">{{ current_label }}</b></span>
+      <span class="loaded">Loaded: <b id="loaded">{{ sizes[current].label }}</b></span>
     </div>
     <div id="msg"></div>
   </div>
@@ -113,12 +150,132 @@
 </main>
 
 <script>
-const msg = document.getElementById("msg");
+const SIZES = {{ sizes | tojson }};
+const CHAR_RATIO = {{ char_ratio }};
+const LINE_GAP = {{ line_gap }};
+const FONT_MIN = {{ font_min }}, FONT_MAX = {{ font_max }};
+
+let stock = {{ current | tojson }};
+const savedFonts = {{ fonts | tojson }};
+
+const $ = id => document.getElementById(id);
+const canvas = $("paper"), ctx = canvas.getContext("2d");
+const msg = $("msg");
 const buttons = [...document.querySelectorAll("button")];
 
-function say(text, kind) {
-  msg.textContent = text;
-  msg.className = kind || "";
+function say(text, kind) { msg.textContent = text; msg.className = kind || ""; }
+
+function fontValue() {
+  const v = parseInt($("font").value, 10);
+  return isNaN(v) ? SIZES[stock].default_font
+                  : Math.min(FONT_MAX, Math.max(FONT_MIN, v));
+}
+
+// Mirrors metrics() and wrap_lines() in app.py.
+function metrics(size, font) {
+  const block = size.pw - 2 * size.margin_x;
+  const usableH = size.ll - 2 * size.margin_y;
+  const lineH = font + LINE_GAP;
+  return {
+    block, lineH,
+    lines: Math.max(1, Math.floor(usableH / lineH)),
+    cpl: Math.max(1, Math.floor(block / (font * CHAR_RATIO))),
+  };
+}
+
+function wrap(text, cpl) {
+  const out = [];
+  for (const para of (text.split("\n").length ? text.split("\n") : [""])) {
+    let line = "";
+    for (let word of para.split(/\s+/).filter(Boolean)) {
+      const cand = (line ? line + " " : "") + word;
+      if (cand.length <= cpl) { line = cand; }
+      else {
+        if (line) out.push(line);
+        while (word.length > cpl) { out.push(word.slice(0, cpl)); word = word.slice(cpl); }
+        line = word;
+      }
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+function draw() {
+  const size = SIZES[stock];
+  const font = fontValue();
+  const m = metrics(size, font);
+  const text = $("text").value.trim();
+  const lines = text ? wrap(text, m.cpl) : [];
+  const over = lines.length > m.lines;
+
+  // Scale the label to fit the stage, capped so small stock isn't huge.
+  const maxW = Math.min(canvas.parentElement.clientWidth - 32, 460);
+  const scale = Math.min(maxW / size.pw, 420 / size.ll);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = size.pw * scale * dpr;
+  canvas.height = size.ll * scale * dpr;
+  canvas.style.width = (size.pw * scale) + "px";
+  canvas.style.height = (size.ll * scale) + "px";
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, size.pw, size.ll);
+
+  // Wrap-box guide.
+  ctx.strokeStyle = over ? "rgba(217,100,91,.55)" : "rgba(0,0,0,.13)";
+  ctx.lineWidth = 1 / scale;
+  ctx.setLineDash([6 / scale, 5 / scale]);
+  ctx.strokeRect(size.margin_x, size.margin_y,
+                 m.block, m.lines * m.lineH);
+  ctx.setLineDash([]);
+
+  // Text, vertically centred like build_text_zpl().
+  const shown = lines.slice(0, over ? m.lines : lines.length);
+  const textH = shown.length * m.lineH;
+  const originY = Math.max(size.margin_y, Math.floor((size.ll - textH) / 2));
+
+  ctx.fillStyle = "#000";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.font = `${font}px "Helvetica Neue", Arial, sans-serif`;
+  shown.forEach((line, i) => {
+    ctx.fillText(line, size.margin_x + m.block / 2,
+                 originY + i * m.lineH + font * 0.82);
+  });
+
+  // Dropped lines, ghosted below the box.
+  if (over) {
+    ctx.fillStyle = "rgba(217,100,91,.45)";
+    lines.slice(m.lines).forEach((line, i) => {
+      ctx.fillText(line, size.margin_x + m.block / 2,
+                   originY + (m.lines + i) * m.lineH + font * 0.82);
+    });
+  }
+
+  $("m-stock").textContent = size.label;
+  $("m-font").textContent = font;
+  $("m-lines").textContent = `${lines.length}/${m.lines}`;
+  $("m-warn").innerHTML = over
+    ? `<span class="over">${lines.length - m.lines} line(s) won't print</span>`
+    : "";
+
+  document.querySelectorAll(".chip[data-scale]").forEach(b => {
+    const target = Math.round(size.default_font * parseFloat(b.dataset.scale));
+    b.classList.toggle("on", target === font);
+  });
+}
+
+// Largest font at which the text still fits.
+function fitFont() {
+  const size = SIZES[stock];
+  const text = $("text").value.trim();
+  if (!text) return;
+  for (let f = FONT_MAX; f >= FONT_MIN; f--) {
+    const m = metrics(size, f);
+    if (wrap(text, m.cpl).length <= m.lines) { $("font").value = f; break; }
+  }
+  draw();
 }
 
 async function post(url, data) {
@@ -137,25 +294,41 @@ async function post(url, data) {
   }
 }
 
-document.getElementById("print").onclick = () => {
-  const text = document.getElementById("text").value;
+$("print").onclick = () => {
+  const text = $("text").value;
   if (!text.trim()) return say("Nothing to print.", "err");
-  post("/print", { text });
+  post("/print", { text, font: fontValue() });
 };
 
-document.getElementById("setstock").onclick = async () => {
-  const stock = document.getElementById("stock").value;
-  const res = await post("/stock", { stock });
-  if (res.ok && res.label) document.getElementById("loaded").textContent = res.label;
-};
-
-document.getElementById("calibrate").onclick = () => post("/calibrate", {});
-
-document.getElementById("text").addEventListener("keydown", e => {
-  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-    document.getElementById("print").click();
+$("setstock").onclick = async () => {
+  const next = $("stock").value;
+  const res = await post("/stock", { stock: next });
+  if (res.ok) {
+    stock = next;
+    $("loaded").textContent = res.label;
+    $("font").value = res.font ?? SIZES[stock].default_font;
+    draw();
   }
+};
+
+$("calibrate").onclick = () => post("/calibrate", {});
+$("fit").onclick = fitFont;
+
+document.querySelectorAll(".chip[data-scale]").forEach(b => {
+  b.onclick = () => {
+    $("font").value = Math.round(SIZES[stock].default_font * parseFloat(b.dataset.scale));
+    draw();
+  };
 });
+
+$("text").addEventListener("input", draw);
+$("font").addEventListener("input", draw);
+$("text").addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") $("print").click();
+});
+window.addEventListener("resize", draw);
+
+draw();
 </script>
 </body>
 </html>
