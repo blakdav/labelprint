@@ -105,14 +105,79 @@ def to_grf(img) -> tuple:
     return out.hex().upper(), len(out), row_bytes
 
 
-def build_image_zpl(img, size) -> str:
+# ZPL's ASCII run-length codes: G-Y are counts 1-19, g-z are 20-400 in
+# steps of 20. A count is built from at most one of each, high first.
+_HIGH = {i: chr(ord("g") + i - 1) for i in range(1, 21)}      # 20..400
+_LOW = {i: chr(ord("G") + i - 1) for i in range(1, 20)}       # 1..19
+
+
+def _rle(count: int, char: str) -> str:
+    """Encode `count` repeats of a hex nibble using ZPL run-length codes."""
+    out = []
+    while count > 0:
+        if count >= 20:
+            n = min(20, count // 20)
+            out.append(_HIGH[n])
+            count -= n * 20
+        else:
+            out.append(_LOW[count])
+            count = 0
+    return "".join(out) + char
+
+
+def compress_grf(hex_data: str, row_bytes: int) -> str:
+    """Compress ^GF hex with ZPL's own scheme.
+
+    Shipping labels are mostly white, so this typically cuts the payload
+    by 10-30x. Without it a 4x6 at 203 dpi is ~248,000 characters, which
+    overruns this printer's buffer and wedges its parser mid-format.
+
+    Codes used: run-length for repeated nibbles, `,` to fill the rest of
+    a row with zeros, `!` to fill with ones, and `:` to repeat the row
+    above verbatim.
+    """
+    row_chars = row_bytes * 2
+    rows = [hex_data[i:i + row_chars] for i in range(0, len(hex_data), row_chars)]
+
+    out = []
+    prev = None
+    for row in rows:
+        if row == prev:
+            out.append(":")
+            continue
+        prev = row
+
+        # Trailing runs of one nibble collapse to a single , or !
+        stripped, tail = row, ""
+        if row.endswith("0") and len(set(row[len(row.rstrip("0")):])) <= 1:
+            stripped, tail = row.rstrip("0"), ","
+        elif row.endswith("F") and len(set(row[len(row.rstrip("F")):])) <= 1:
+            stripped, tail = row.rstrip("F"), "!"
+
+        buf = []
+        i = 0
+        while i < len(stripped):
+            ch = stripped[i]
+            run = 1
+            while i + run < len(stripped) and stripped[i + run] == ch:
+                run += 1
+            buf.append(_rle(run, ch) if run > 2 else ch * run)
+            i += run
+
+        out.append("".join(buf) + tail)
+
+    return "".join(out)
+
+
+def build_image_zpl(img, size, compress=True) -> str:
     data, total, row_bytes = to_grf(img)
+    payload = compress_grf(data, row_bytes) if compress else data
     return (
         "^XA"
         f"^PW{size['pw']}"
         f"^LL{size['ll']}"
         "^FO0,0"
-        f"^GFA,{total},{total},{row_bytes},{data}"
+        f"^GFA,{total},{total},{row_bytes},{payload}"
         "^FS"
         "^PQ1"
         "^XZ"

@@ -152,4 +152,21 @@ thresholded bitmap the printer will receive.
 Thresholding is a plain cut at 128 with no dithering — every real input
 here is high-contrast line art, and dithering makes barcodes mushy.
 
+### Job size
+
+Uncompressed, a 4x6 at 203 dpi is ~248,000 characters of hex — enough to
+overrun this printer's input buffer, which leaves its parser stuck
+mid-format. Everything sent afterwards is then swallowed as graphic data
+and nothing prints until the printer is power-cycled.
+
+Two guards:
+
+- **ZPL ASCII compression** on all `^GF` data (run-length codes plus
+  `,` `!` `:` for blank, filled and repeated rows). A shipping label
+  drops to ~39,000 characters; noisier images like a full-page QR
+  compress less, so the win varies.
+- **Chunked writes** — jobs above `CHUNK_SIZE` (4096 bytes) go out in
+  pieces with `CHUNK_DELAY` (50 ms) between them, and anything over
+  `MAX_JOB_CHARS` (150,000) is refused outright. All three are env vars.
+
 Uploads are capped at 20 MB.

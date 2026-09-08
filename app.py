@@ -4,6 +4,7 @@
 import json
 import os
 import socket
+import time
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
@@ -53,6 +54,12 @@ DEFAULT_SIZES = {
 
 FONT_MIN, FONT_MAX = 10, 200
 MAX_UPLOAD_MB = 20
+
+# Chunked writes for big graphic jobs, tunable without a rebuild.
+CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "4096"))
+CHUNK_DELAY = float(os.environ.get("CHUNK_DELAY", "0.05"))
+# Refuse jobs beyond this rather than risk wedging the printer.
+MAX_JOB_CHARS = int(os.environ.get("MAX_JOB_CHARS", "150000"))
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
@@ -162,11 +169,24 @@ def count_lines(text, chars_per_line):
 # --- printer ---------------------------------------------------------------
 
 def send_raw(payload: str):
+    """Write a ZPL job to the printer.
+
+    Large graphic jobs go out in chunks with a short pause between them.
+    This printer's input buffer is small enough that a single large
+    write can leave its parser stuck mid-format, after which every
+    later job is swallowed as graphic data until it's power-cycled.
+    """
+    data = payload.encode("utf-8")
     try:
         with socket.create_connection(
             (PRINTER_HOST, PRINTER_PORT), timeout=SOCKET_TIMEOUT
         ) as sock:
-            sock.sendall(payload.encode("utf-8"))
+            if len(data) <= CHUNK_SIZE:
+                sock.sendall(data)
+            else:
+                for i in range(0, len(data), CHUNK_SIZE):
+                    sock.sendall(data[i:i + CHUNK_SIZE])
+                    time.sleep(CHUNK_DELAY)
         return True, "Sent to printer."
     except socket.timeout:
         return False, f"Timed out connecting to {PRINTER_HOST}:{PRINTER_PORT}."
@@ -415,9 +435,20 @@ def print_image():
     except Exception as exc:
         return jsonify(ok=False, message=f"Could not convert image: {exc}"), 500
 
+    if len(zpl) > MAX_JOB_CHARS:
+        return jsonify(
+            ok=False,
+            message=f"Job is {len(zpl):,} characters, over the "
+                    f"{MAX_JOB_CHARS:,} limit. Very detailed images on large "
+                    "stock can exceed the printer's buffer. Try smaller stock "
+                    "or a simpler image.",
+        ), 400
+
     ok, message = send_raw(zpl)
     if ok:
-        message = f"Printed {upload.filename}" + (" (rotated)." if rotated else ".")
+        message = (f"Printed {upload.filename}"
+                   + (" (rotated)" if rotated else "")
+                   + f", {len(zpl):,} chars.")
     return jsonify(ok=ok, message=message), (200 if ok else 502)
 
 
