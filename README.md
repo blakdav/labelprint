@@ -138,7 +138,10 @@ at 3 dots per module. A 33-module code (short URL) needs ~130 dots at
 magnification 4, so 4x6 and 4x2 are comfortable, 2x1 works, and
 1.57x0.78 only suits short data.
 
-**Image** — GIF/PNG/JPG/BMP/WEBP/PDF, converted to `^GF`. PDFs render
+**Image** — GIF/PNG/JPG/BMP/WEBP/PDF, converted to `^GF`. Files arrive
+by drag-drop, file picker, or clipboard paste (Ctrl/Cmd+V anywhere on
+the page switches to the Image tab and loads it) — handy for a QR code
+copied straight out of a returns page. PDFs render
 page 1 at 300 dpi then downscale, which survives thresholding better
 than rendering straight to 203. Images are letterboxed rather than
 cropped: a cropped barcode is worse than a smaller one. Auto-rotate

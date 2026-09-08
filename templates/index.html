@@ -234,8 +234,8 @@
       <label class="drop" id="drop">
         <input type="file" id="file"
                accept=".png,.jpg,.jpeg,.gif,.bmp,.webp,.pdf,image/*,application/pdf">
-        <span id="dropmsg">Drop a shipping label, QR screenshot or PDF here,
-          or click to choose</span>
+        <span id="dropmsg">Drop a shipping label, QR code or PDF here,
+          click to choose, or paste from the clipboard</span>
       </label>
       <div class="fontrow">
         <label>Rotate</label>
@@ -640,6 +640,25 @@ async function imagePreview() {
   }
   syncImageButton();
 }
+
+// Clipboard paste: copy a QR or label image and hit Ctrl/Cmd+V anywhere.
+document.addEventListener("paste", ev => {
+  const item = [...(ev.clipboardData?.items || [])]
+    .find(i => i.type.startsWith("image/"));
+  if (!item) return;               // let text paste behave normally
+  const blob = item.getAsFile();
+  if (!blob) return;
+  ev.preventDefault();
+
+  // A pasted image is always an image-tab action, so switch there.
+  document.querySelector('.tabs button[data-tab="image"]').click();
+
+  const ext = (blob.type.split("/")[1] || "png").replace("jpeg", "jpg");
+  const dt = new DataTransfer();
+  dt.items.add(new File([blob], `pasted.${ext}`, { type: blob.type }));
+  fileInput.files = dt.files;
+  imagePreview();
+});
 
 $("imgprint").onclick = () => {
   if (!fileInput.files.length) return say("No file chosen.", "err");
