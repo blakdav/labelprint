@@ -21,12 +21,38 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
 STATE_FILE = DATA_DIR / "state.json"
 SIZES_FILE = DATA_DIR / "sizes.json"
 
-# ZPL font 0 is proportional. Measured against real 203 dpi output: a
-# 732-dot block at font 70 fits ~27 mixed-case characters, so the average
-# glyph advance is ~0.39x the font height. Tunable without a rebuild if a
-# different font or character mix shifts it.
+# ZPL font 0 is proportional, so a single average ratio misjudges any
+# string that isn't mixed-case prose — ALL CAPS runs far wider than
+# lowercase and ends up off-centre. These are per-character advances as
+# a fraction of font height, close enough for wrapping and centring.
 CHAR_WIDTH_RATIO = float(os.environ.get("CHAR_WIDTH_RATIO", "0.39"))
 LINE_GAP = 4  # dots of extra leading between wrapped lines
+
+_NARROW = "iljI.,:;'`|!"
+_WIDE = "mwMW@"
+_CAP_RATIO = 0.62
+_LOWER_RATIO = 0.47
+_DIGIT_RATIO = 0.55
+
+
+def char_width(ch: str, font: int) -> float:
+    if ch == " ":
+        return font * 0.26
+    if ch in _NARROW:
+        return font * 0.24
+    if ch in _WIDE:
+        return font * 0.82
+    if ch.isupper():
+        return font * _CAP_RATIO
+    if ch.isdigit():
+        return font * _DIGIT_RATIO
+    if ch.islower():
+        return font * _LOWER_RATIO
+    return font * 0.5
+
+
+def text_width(text: str, font: int) -> float:
+    return sum(char_width(c, font) for c in text)
 
 # All dimensions in dots. inches * 203 = dots.
 DEFAULT_SIZES = {
@@ -133,12 +159,33 @@ def metrics(size, font, landscape=False):
     }
 
 
-def wrap_lines(text, chars_per_line):
-    """Greedy word wrap matching ^FB behaviour closely enough for capacity.
+def wrap_lines(text, chars_per_line, block=None, font=None):
+    """Greedy word wrap.
+
+    When `block` and `font` are given, wrapping measures each candidate
+    line in dots — necessary because character widths vary enough that a
+    character count misjudges ALL CAPS badly. Otherwise it falls back to
+    the character budget.
 
     Explicit newlines are hard breaks — ^FB treats each \\& the same way,
     so a blank line costs a line of the budget just like it does here.
     """
+    measured = block is not None and font is not None
+    fits = (lambda s: text_width(s, font) <= block) if measured \
+        else (lambda s: len(s) <= chars_per_line)
+
+    def split_long(word):
+        """Break a word too long for one line."""
+        parts = []
+        cur = ""
+        for ch in word:
+            if cur and not fits(cur + ch):
+                parts.append(cur)
+                cur = ch
+            else:
+                cur += ch
+        return parts, cur
+
     out = []
     for para in text.split("\n"):
         words = para.split()
@@ -148,22 +195,19 @@ def wrap_lines(text, chars_per_line):
         line = ""
         for word in words:
             candidate = f"{line} {word}".strip()
-            if len(candidate) <= chars_per_line:
+            if fits(candidate):
                 line = candidate
             else:
                 if line:
                     out.append(line)
-                # A single word longer than the line gets hard-split.
-                while len(word) > chars_per_line:
-                    out.append(word[:chars_per_line])
-                    word = word[chars_per_line:]
-                line = word
+                parts, line = split_long(word)
+                out.extend(parts)
         out.append(line)
     return out
 
 
-def count_lines(text, chars_per_line):
-    return len(wrap_lines(escape_zpl(text).strip(), chars_per_line))
+def count_lines(text, chars_per_line, block=None, font=None):
+    return len(wrap_lines(escape_zpl(text).strip(), chars_per_line, block, font))
 
 
 # --- printer ---------------------------------------------------------------
@@ -215,7 +259,8 @@ def zpl_body(text: str) -> str:
 
 def build_text_zpl(text, size, font, landscape=False):
     m = metrics(size, font, landscape)
-    lines = wrap_lines(escape_zpl(text).strip(), m["chars_per_line"])
+    lines = wrap_lines(escape_zpl(text).strip(), m["chars_per_line"],
+                       m["block"], font)
     lines = lines[:m["lines"]]
 
     head = (
@@ -242,7 +287,7 @@ def build_text_zpl(text, size, font, landscape=False):
     # Rotated: ^FB positions unpredictably on this firmware, so place
     # each line as its own field with explicit coordinates.
     #
-    # Under ^A0R text reads top-to-bottom (along +y) and the glyph body
+    # Under ^A0R text reads top-to-bottom (along +y) and the glyph cell
     # extends along +x, so lines stack across the label's width and each
     # line runs down its length.
     text_block = len(lines) * m["line_h"]
@@ -251,9 +296,11 @@ def build_text_zpl(text, size, font, landscape=False):
     fields = []
     for i, line in enumerate(lines):
         body = escape_zpl(line)
-        # Centre each line along the axis it runs down.
-        line_w = len(line) * font * CHAR_WIDTH_RATIO
-        y = max(size["margin_y"], int((size["ll"] - line_w) / 2))
+        # Centre each line along the axis it runs down. Measured rather
+        # than counted: ALL CAPS is ~60% wider than the same number of
+        # lowercase characters, which visibly shifts the start point.
+        y = max(size["margin_y"],
+                int((size["ll"] - text_width(line, font)) / 2))
         x = start_x + i * m["line_h"]
         fields.append(f"^FO{x},{y}^A0R,{font},{font}^FD{body}^FS")
 
@@ -285,6 +332,11 @@ def index():
         font_min=FONT_MIN,
         font_max=FONT_MAX,
         char_ratio=CHAR_WIDTH_RATIO,
+        cap_ratio=_CAP_RATIO,
+        lower_ratio=_LOWER_RATIO,
+        digit_ratio=_DIGIT_RATIO,
+        narrow_chars=_NARROW,
+        wide_chars=_WIDE,
         line_gap=LINE_GAP,
         printer=f"{PRINTER_HOST}:{PRINTER_PORT}",
         printer_host=PRINTER_HOST,
@@ -306,7 +358,7 @@ def do_print():
     landscape = request.form.get("landscape") in ("1", "true", "on")
 
     m = metrics(size, font, landscape)
-    used = count_lines(text, m["chars_per_line"])
+    used = count_lines(text, m["chars_per_line"], m["block"], font)
     if used > m["lines"]:
         return jsonify(
             ok=False,

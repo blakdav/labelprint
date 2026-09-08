@@ -117,10 +117,12 @@ turns green or red depending on whether port 9100 accepts a connection.
   yourself can't inject a line break.
 - `^FD` ignores raw newlines. Blank lines and paragraph breaks are
   converted to `\&`, which `^FB` treats as a hard break.
-- `CHAR_WIDTH_RATIO` (default 0.39) is measured from real output: a
-  732-dot block at font 70 fits ~27 characters. Override it with the
-  env var if your text runs consistently wider or narrower than the
-  preview predicts.
+- **Character widths are per-character, not a flat ratio.** ZPL font 0
+  is proportional, and ALL CAPS runs ~60% wider than the same count of
+  lowercase — enough to visibly shift centred landscape text. Widths are
+  fractions of font height: caps 0.62, lowercase 0.47, digits 0.55,
+  `iljI.,:;` 0.24, `mwMW@` 0.82, space 0.26. Wrapping and centring both
+  measure with these; the preview mirrors them exactly.
 - `^FB` drops overflow lines silently, so the server rejects text that
   needs more lines than fit rather than printing a truncated label.
 

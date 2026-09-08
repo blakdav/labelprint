@@ -319,6 +319,26 @@
 <script>
 const SIZES = {{ sizes | tojson }};
 const CHAR_RATIO = {{ char_ratio }};
+// Mirrors char_width()/text_width() in app.py.
+const NARROW = {{ narrow_chars | tojson }};
+const WIDE = {{ wide_chars | tojson }};
+const CAP_R = {{ cap_ratio }}, LOW_R = {{ lower_ratio }}, DIG_R = {{ digit_ratio }};
+
+function charWidth(ch, font) {
+  if (ch === " ") return font * 0.26;
+  if (NARROW.includes(ch)) return font * 0.24;
+  if (WIDE.includes(ch)) return font * 0.82;
+  if (/[A-Z]/.test(ch) || (ch !== ch.toLowerCase() && ch === ch.toUpperCase()))
+    return font * CAP_R;
+  if (/[0-9]/.test(ch)) return font * DIG_R;
+  if (/[a-z]/.test(ch) || ch !== ch.toUpperCase()) return font * LOW_R;
+  return font * 0.5;
+}
+function textWidth(s, font) {
+  let w = 0;
+  for (const ch of s) w += charWidth(ch, font);
+  return w;
+}
 const LINE_GAP = {{ line_gap }};
 const FONT_MIN = {{ font_min }}, FONT_MAX = {{ font_max }};
 
@@ -356,20 +376,25 @@ function metrics(size, font) {
   };
 }
 
-function wrap(text, cpl) {
+function wrap(text, cpl, block, font) {
   const out = [];
+  const fits = s => textWidth(s, font) <= block;
   // Explicit newlines are hard breaks, same as ^FB's \& sequence.
   for (const para of text.split("\n")) {
     const words = para.split(/\s+/).filter(Boolean);
     if (!words.length) { out.push(""); continue; }
     let line = "";
-    for (let word of words) {
+    for (const word of words) {
       const cand = (line ? line + " " : "") + word;
-      if (cand.length <= cpl) { line = cand; }
+      if (fits(cand)) { line = cand; }
       else {
         if (line) out.push(line);
-        while (word.length > cpl) { out.push(word.slice(0, cpl)); word = word.slice(cpl); }
-        line = word;
+        let cur = "";
+        for (const ch of word) {
+          if (cur && !fits(cur + ch)) { out.push(cur); cur = ch; }
+          else cur += ch;
+        }
+        line = cur;
       }
     }
     out.push(line);
@@ -382,7 +407,7 @@ function draw() {
   const font = fontValue();
   const m = metrics(size, font);
   const text = $("text").value.trim();
-  const lines = text ? wrap(text, m.cpl) : [];
+  const lines = text ? wrap(text, m.cpl, m.block, font) : [];
   const over = lines.length > m.lines;
 
   // Scale the label to fit the stage, capped so small stock isn't huge.
@@ -417,6 +442,11 @@ function draw() {
   const axisLen = landscape ? size.pw : size.ll;
   const originY = Math.max(landscape ? size.margin_x : size.margin_y,
                            Math.floor((axisLen - textH) / 2));
+  // In landscape each line is centred along its own run, matching
+  // build_text_zpl(); in portrait ^FB centres them as a block.
+  const lineStart = line => landscape
+    ? Math.max(size.margin_y, Math.floor((size.ll - textWidth(line, font)) / 2))
+    : null;
 
   // Wrap-box guide.
   ctx.strokeStyle = over ? "rgba(217,100,91,.55)" : "rgba(0,0,0,.13)";
@@ -429,20 +459,19 @@ function draw() {
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
   ctx.font = `${font}px "Helvetica Neue", Arial, sans-serif`;
-  const cx = boxX + m.block / 2;
   const fit = (line, y) => {
-    // Squeeze to the wrap box if the browser font runs wider than ZPL's.
-    const w = ctx.measureText(line).width;
-    if (w > m.block && w > 0) {
-      ctx.save();
-      ctx.translate(cx, y);
-      ctx.scale(m.block / w, 1);
-      ctx.fillText(line, 0, 0);
-      ctx.restore();
-    } else {
-      ctx.fillText(line, cx, y);
-    }
+    // Draw at the width ZPL will actually produce, so the preview shows
+    // the real start point rather than the browser font's.
+    const want = textWidth(line, font);
+    const have = ctx.measureText(line).width || want;
+    const start = landscape ? lineStart(line) : boxX + (m.block - want) / 2;
+    ctx.save();
+    ctx.translate(start, y);
+    ctx.scale(want / have, 1);
+    ctx.fillText(line, 0, 0);
+    ctx.restore();
   };
+  ctx.textAlign = "left";
   shown.forEach((line, i) => {
     fit(line, originY + i * m.lineH + font * 0.82);
   });
@@ -480,7 +509,7 @@ function fitFont() {
   if (!text) return;
   for (let f = FONT_MAX; f >= FONT_MIN; f--) {
     const m = metrics(size, f);
-    if (wrap(text, m.cpl).length <= m.lines) { $("font").value = f; break; }
+    if (wrap(text, m.cpl, m.block, f).length <= m.lines) { $("font").value = f; break; }
   }
   draw();
 }
