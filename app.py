@@ -8,6 +8,8 @@ from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
 
+import graphics
+
 PRINTER_HOST = os.environ.get("PRINTER_HOST", "172.23.24.79")
 PRINTER_PORT = int(os.environ.get("PRINTER_PORT", "9100"))
 SOCKET_TIMEOUT = 5
@@ -50,8 +52,10 @@ DEFAULT_SIZES = {
 }
 
 FONT_MIN, FONT_MAX = 10, 200
+MAX_UPLOAD_MB = 20
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 
 
 # --- state -----------------------------------------------------------------
@@ -323,6 +327,136 @@ def set_stock():
         font=font_for(state, sizes, stock),
         landscape=landscape_for(state, stock),
     )
+
+
+@app.post("/qr")
+def print_qr():
+    text = (request.form.get("text") or "").strip()
+    if not text:
+        return jsonify(ok=False, message="Nothing to encode."), 400
+
+    sizes = load_sizes()
+    state = load_state()
+    size = sizes[state["stock"]]
+
+    ec = request.form.get("ec", "M").upper()
+    if ec not in ("L", "M", "Q", "H"):
+        ec = "M"
+
+    caption = (request.form.get("caption") or "").strip()
+    cap_font = clamp_font(request.form.get("caption_font"), 0) if caption else 0
+
+    try:
+        mag = int(request.form.get("magnification", 0))
+    except (TypeError, ValueError):
+        mag = 0
+    if mag <= 0:
+        mag = graphics.suggest_magnification(text, size, ec)
+    mag = max(1, min(10, mag))
+
+    modules = graphics.qr_modules(text, ec)
+    qr_px = modules * mag
+    if qr_px > size["pw"] or qr_px > size["ll"]:
+        return jsonify(
+            ok=False,
+            message=f"QR is {qr_px} dots at magnification {mag}, too big for "
+                    f"this label ({size['pw']}x{size['ll']}). Lower the "
+                    "magnification or use bigger stock.",
+        ), 400
+
+    zpl = graphics.build_qr_zpl(text, size, mag, ec, caption, cap_font)
+    ok, message = send_raw(zpl)
+    if ok:
+        note = "" if mag >= graphics.QR_MIN_MAGNIFICATION else \
+            " Magnification is low, so it may not scan reliably."
+        message = f"Printed {modules}x{modules} QR at magnification {mag}.{note}"
+    return jsonify(ok=ok, message=message), (200 if ok else 502)
+
+
+@app.post("/qr/info")
+def qr_info():
+    """Module count and suggested magnification, for the live preview."""
+    text = (request.form.get("text") or "").strip()
+    sizes = load_sizes()
+    size = sizes[load_state()["stock"]]
+    ec = request.form.get("ec", "M").upper()
+    if ec not in ("L", "M", "Q", "H"):
+        ec = "M"
+    if not text:
+        return jsonify(ok=True, modules=0, suggested=1)
+    return jsonify(
+        ok=True,
+        modules=graphics.qr_modules(text, ec),
+        suggested=graphics.suggest_magnification(text, size, ec),
+    )
+
+
+@app.post("/image")
+def print_image():
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return jsonify(ok=False, message="No file uploaded."), 400
+
+    sizes = load_sizes()
+    size = sizes[load_state()["stock"]]
+    rotate = request.form.get("rotate", "auto")
+    if rotate not in ("auto", "none", "90", "270"):
+        rotate = "auto"
+    invert = request.form.get("invert") in ("1", "true", "on")
+
+    try:
+        img = graphics.load_image(upload.read(), upload.filename)
+    except Exception as exc:
+        return jsonify(ok=False, message=f"Could not read that file: {exc}"), 400
+
+    try:
+        fitted, rotated = graphics.fit_to_label(img, size, rotate, invert)
+        zpl = graphics.build_image_zpl(fitted, size)
+    except Exception as exc:
+        return jsonify(ok=False, message=f"Could not convert image: {exc}"), 500
+
+    ok, message = send_raw(zpl)
+    if ok:
+        message = f"Printed {upload.filename}" + (" (rotated)." if rotated else ".")
+    return jsonify(ok=ok, message=message), (200 if ok else 502)
+
+
+@app.post("/image/preview")
+def image_preview():
+    """Render the thresholded bitmap the printer would receive."""
+    import base64
+
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return jsonify(ok=False, message="No file uploaded."), 400
+
+    sizes = load_sizes()
+    size = sizes[load_state()["stock"]]
+    rotate = request.form.get("rotate", "auto")
+    invert = request.form.get("invert") in ("1", "true", "on")
+
+    try:
+        img = graphics.load_image(upload.read(), upload.filename)
+        fitted, rotated = graphics.fit_to_label(img, size, rotate, invert)
+    except Exception as exc:
+        return jsonify(ok=False, message=f"Could not read that file: {exc}"), 400
+
+    # Downscale for transport; the preview only needs to show layout.
+    import io
+    thumb = fitted.convert("L")
+    thumb.thumbnail((600, 900))
+    buf = io.BytesIO()
+    thumb.save(buf, format="PNG")
+    return jsonify(
+        ok=True,
+        rotated=rotated,
+        image="data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
+    )
+
+
+@app.errorhandler(413)
+def too_large(_):
+    return jsonify(ok=False, message=f"File is over {MAX_UPLOAD_MB} MB."), 413
 
 
 @app.get("/status")

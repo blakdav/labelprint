@@ -134,6 +134,26 @@
   }
   .status.up .led { background: var(--ok); }
   .status.down .led { background: var(--err); }
+
+  .tabs { display: flex; gap: .4rem; margin-bottom: .9rem; }
+  .tabs button {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--line); padding: .45rem .95rem; font-size: .85rem;
+  }
+  .tabs button.on { background: var(--accent); color: #0f1115; border-color: var(--accent); }
+  .tabpane { display: none; }
+  .tabpane.on { display: block; }
+
+  .drop {
+    border: 1px dashed var(--line); border-radius: 8px;
+    padding: 1.6rem 1rem; text-align: center; color: var(--muted);
+    cursor: pointer; font-size: .87rem;
+  }
+  .drop.hot { border-color: var(--accent); color: var(--fg); }
+  .drop input { display: none; }
+  #imgprev { max-width: 100%; background: #fff; border-radius: 4px; }
+  .qrhint { color: var(--muted); font-size: .78rem; margin-top: .5rem; }
+  .qrhint.warn { color: var(--err); }
 </style>
 </head>
 <body>
@@ -156,7 +176,13 @@
   </div>
 
   <div class="panel">
-    <h2>Print</h2>
+    <div class="tabs">
+      <button class="on" data-tab="text">Text</button>
+      <button data-tab="qr">QR</button>
+      <button data-tab="image">Image</button>
+    </div>
+
+    <div class="tabpane on" id="pane-text">
     <textarea id="text" placeholder="Type label text…" autofocus></textarea>
 
     <div class="fontrow">
@@ -175,6 +201,61 @@
 
     <div class="actions">
       <button id="print">Print</button>
+    </div>
+    </div>
+
+    <div class="tabpane" id="pane-qr">
+      <textarea id="qrtext" placeholder="URL or text to encode…"></textarea>
+      <div class="fontrow">
+        <label>Size</label>
+        <input type="number" id="qrmag" placeholder="auto" min="1" max="10">
+        <label>Error correction</label>
+        <select id="qrec" style="width:auto">
+          <option value="L">L (7%)</option>
+          <option value="M" selected>M (15%)</option>
+          <option value="Q">Q (25%)</option>
+          <option value="H">H (30%)</option>
+        </select>
+      </div>
+      <div class="fontrow">
+        <label>Caption</label>
+        <input type="text" id="qrcap" placeholder="optional text below"
+               style="flex:1;min-width:9rem">
+        <input type="number" id="qrcapfont" value="30"
+               min="{{ font_min }}" max="{{ font_max }}">
+      </div>
+      <div class="qrhint" id="qrhint"></div>
+      <div class="actions">
+        <button id="qrprint">Print QR</button>
+      </div>
+    </div>
+
+    <div class="tabpane" id="pane-image">
+      <label class="drop" id="drop">
+        <input type="file" id="file"
+               accept=".png,.jpg,.jpeg,.gif,.bmp,.webp,.pdf,image/*,application/pdf">
+        <span id="dropmsg">Drop a shipping label, QR screenshot or PDF here,
+          or click to choose</span>
+      </label>
+      <div class="fontrow">
+        <label>Rotate</label>
+        <select id="rotate" style="width:auto">
+          <option value="auto" selected>Auto</option>
+          <option value="none">None</option>
+          <option value="90">90° CW</option>
+          <option value="270">90° CCW</option>
+        </select>
+        <label><input type="checkbox" id="invert"> Invert</label>
+      </div>
+      <div id="imgwrap" style="display:none;margin-top:.8rem;text-align:center">
+        <img id="imgprev" alt="preview">
+      </div>
+      <div class="actions">
+        <button id="imgprint" disabled>Print image</button>
+      </div>
+    </div>
+
+    <div class="actions" style="margin-top:.2rem">
       <span class="loaded">Loaded: <b id="loaded">{{ sizes[current].label }}</b></span>
     </div>
     <div id="msg"></div>
@@ -408,7 +489,8 @@ async function post(url, data) {
   buttons.forEach(b => b.disabled = true);
   say("Working…");
   try {
-    const res = await fetch(url, { method: "POST", body: new URLSearchParams(data) });
+    const body = data instanceof FormData ? data : new URLSearchParams(data);
+    const res = await fetch(url, { method: "POST", body });
     const json = await res.json();
     say(json.message, json.ok ? "ok" : "err");
     return json;
@@ -417,6 +499,7 @@ async function post(url, data) {
     return { ok: false };
   } finally {
     buttons.forEach(b => b.disabled = false);
+    syncImageButton();
   }
 }
 
@@ -457,6 +540,115 @@ $("text").addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") $("print").click();
 });
 window.addEventListener("resize", draw);
+
+/* ---- tabs ---- */
+const previewPanel = document.querySelector(".panel");
+document.querySelectorAll(".tabs button").forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll(".tabs button").forEach(x => x.classList.remove("on"));
+    document.querySelectorAll(".tabpane").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    $("pane-" + b.dataset.tab).classList.add("on");
+    // The canvas preview only describes the text tab.
+    document.querySelector("details.help").previousElementSibling;
+    $("stage").parentElement.style.display =
+      b.dataset.tab === "text" ? "" : "none";
+    say("");
+  };
+});
+
+/* ---- QR ---- */
+let qrTimer = null;
+async function qrInfo() {
+  const text = $("qrtext").value.trim();
+  const hint = $("qrhint");
+  if (!text) { hint.textContent = ""; hint.className = "qrhint"; return; }
+  try {
+    const r = await (await fetch("/qr/info", {
+      method: "POST",
+      body: new URLSearchParams({ text, ec: $("qrec").value })
+    })).json();
+    const mag = parseInt($("qrmag").value, 10) || r.suggested;
+    const px = r.modules * mag;
+    const inches = (px / 203).toFixed(2);
+    const low = mag < 4;
+    hint.className = "qrhint" + (low ? " warn" : "");
+    hint.textContent = `${r.modules}x${r.modules} modules at magnification `
+      + `${mag} = ${px} dots (${inches}")`
+      + (low ? " — may not scan reliably" : "")
+      + ($("qrmag").value ? "" : `, auto`);
+  } catch { hint.textContent = ""; }
+}
+["qrtext", "qrec", "qrmag"].forEach(id =>
+  $(id).addEventListener("input", () => {
+    clearTimeout(qrTimer); qrTimer = setTimeout(qrInfo, 250);
+  }));
+
+$("qrprint").onclick = () => {
+  const text = $("qrtext").value.trim();
+  if (!text) return say("Nothing to encode.", "err");
+  post("/qr", {
+    text,
+    ec: $("qrec").value,
+    magnification: $("qrmag").value || 0,
+    caption: $("qrcap").value,
+    caption_font: $("qrcapfont").value,
+  });
+};
+
+/* ---- image ---- */
+const drop = $("drop"), fileInput = $("file");
+
+function syncImageButton() {
+  const btn = $("imgprint");
+  if (btn) btn.disabled = !fileInput.files.length;
+}
+
+["dragenter", "dragover"].forEach(e =>
+  drop.addEventListener(e, ev => {
+    ev.preventDefault(); drop.classList.add("hot");
+  }));
+["dragleave", "drop"].forEach(e =>
+  drop.addEventListener(e, ev => {
+    ev.preventDefault(); drop.classList.remove("hot");
+  }));
+drop.addEventListener("drop", ev => {
+  if (ev.dataTransfer.files.length) {
+    fileInput.files = ev.dataTransfer.files;
+    imagePreview();
+  }
+});
+fileInput.addEventListener("change", imagePreview);
+$("rotate").addEventListener("change", imagePreview);
+$("invert").addEventListener("change", imagePreview);
+
+async function imagePreview() {
+  if (!fileInput.files.length) return;
+  const f = fileInput.files[0];
+  $("dropmsg").textContent = f.name;
+  const fd = new FormData();
+  fd.append("file", f);
+  fd.append("rotate", $("rotate").value);
+  if ($("invert").checked) fd.append("invert", "1");
+  const r = await post("/image/preview", fd);
+  if (r.ok) {
+    $("imgprev").src = r.image;
+    $("imgwrap").style.display = "";
+    say(r.rotated ? "Rotated to fit the label." : "Ready to print.", "ok");
+  } else {
+    $("imgwrap").style.display = "none";
+  }
+  syncImageButton();
+}
+
+$("imgprint").onclick = () => {
+  if (!fileInput.files.length) return say("No file chosen.", "err");
+  const fd = new FormData();
+  fd.append("file", fileInput.files[0]);
+  fd.append("rotate", $("rotate").value);
+  if ($("invert").checked) fd.append("invert", "1");
+  post("/image", fd);
+};
 
 async function checkStatus() {
   const el = $("status"), txt = $("status-text");

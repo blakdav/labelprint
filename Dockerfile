@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py .
+COPY app.py graphics.py ./
 COPY templates/ templates/
 
 ENV PRINTER_HOST=172.23.24.79 \

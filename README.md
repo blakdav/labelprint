@@ -124,8 +124,29 @@ turns green or red depending on whether port 9100 accepts a connection.
 - `^FB` drops overflow lines silently, so the server rejects text that
   needs more lines than fit rather than printing a truncated label.
 
-## TODO
+## Modes
 
-- Image mode: upload GIF/PNG/JPG/PDF → rotate → scale → `^GF`
-  (Amazon return labels arrive as 1800×1200 two-colour GIFs, which map
-  exactly onto 4x6 at 203 dpi)
+Three tabs in the print panel.
+
+**Text** — wrapped, centred, portrait or landscape. See Orientation above.
+
+**QR** — native `^BQ`, so the printer renders the code at full
+resolution. Magnification defaults to the largest that fits the loaded
+stock; a caption can be printed underneath. Below magnification 4 the
+UI warns, since thermal printing plus a phone camera gets unreliable
+at 3 dots per module. A 33-module code (short URL) needs ~130 dots at
+magnification 4, so 4x6 and 4x2 are comfortable, 2x1 works, and
+1.57x0.78 only suits short data.
+
+**Image** — GIF/PNG/JPG/BMP/WEBP/PDF, converted to `^GF`. PDFs render
+page 1 at 300 dpi then downscale, which survives thresholding better
+than rendering straight to 203. Images are letterboxed rather than
+cropped: a cropped barcode is worse than a smaller one. Auto-rotate
+turns the image when its long axis disagrees with the label's, which is
+what Amazon's 1800x1200 return-label GIFs need. Preview shows the actual
+thresholded bitmap the printer will receive.
+
+Thresholding is a plain cut at 128 with no dithering — every real input
+here is high-contrast line art, and dithering makes barcodes mushy.
+
+Uploads are capped at 20 MB.
