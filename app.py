@@ -78,7 +78,9 @@ DEFAULT_SIZES = {
     },
 }
 
-FONT_MIN, FONT_MAX = 10, 200
+# 4x6 is 1218 dots tall, so 1200 is the practical ceiling; a single
+# character at that size fills the label.
+FONT_MIN, FONT_MAX = 10, 1200
 MAX_UPLOAD_MB = 20
 
 # Chunked writes for big graphic jobs, tunable without a rebuild.
@@ -301,7 +303,11 @@ def build_text_zpl(text, size, font, landscape=False):
         # lowercase characters, which visibly shifts the start point.
         y = max(size["margin_y"],
                 int((size["ll"] - text_width(line, font)) / 2))
-        x = start_x + i * m["line_h"]
+        # Successive lines stack toward -x under ^A0R: reading the label
+        # with the rotated text upright, the first line sits on the far
+        # side, so place them in reverse to keep reading order.
+        slot = len(lines) - 1 - i
+        x = start_x + slot * m["line_h"]
         fields.append(f"^FO{x},{y}^A0R,{font},{font}^FD{body}^FS")
 
     return head + "".join(fields) + "^PQ1^XZ"

@@ -76,8 +76,10 @@ The two orientations emit different ZPL:
   check already use.
 
 Landscape assumes `^A0R` text reads top-to-bottom along +y with the
-glyph body extending along +x, so lines stack across the label width and
-each line runs down its length. If output is mirrored or offset, those
+glyph cell extending along +x. Lines stack across the label width but
+toward **-x**: reading the label with the rotated text upright, the
+first line sits at the higher x, so `build_text_zpl` places them in
+reverse to keep reading order. If output is mirrored or offset, those
 two assumptions in `build_text_zpl` are the knobs.
 
 ## Preview
